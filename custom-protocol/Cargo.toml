@@ -1,0 +1,13 @@
+[package]
+name = "hyperdesk-quic-engine"
+version = "1.0.0"
+description = "HyperDesk Custom QUIC Ultra-Low Latency Protocol Engine (<15ms)"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1.36", features = ["full"] }
+quinn = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bytes = "1.5"
+anyhow = "1.0"
