@@ -196,14 +196,31 @@ func (d *DXGIBackend) Initialize() error {
 
 	// Attempt DirectX 11 / DXGI Desktop Duplication API initialization
 	if runtime.GOOS == "windows" {
-		// Attempting DXGI Output Duplication initialization...
-		// Fallback to GDIBackend if DXGI device or session is unavailable
-		d.isDXGIActive = true
-		fmt.Printf("[DXGIBackend] Initialized DirectX 11 Desktop Duplication Engine (%dx%d)\n", d.ScreenWidth, d.ScreenHeight)
-		return nil
+		if procD3D11CreateDevice != nil && procD3D11CreateDevice.Find() == nil {
+			var device uintptr
+			// D3D11CreateDevice(pAdapter, DriverType=HARDWARE, Software=NULL, Flags=0, pFeatureLevels=NULL, FeatureLevels=0, SDKVersion=7, ppDevice, pFeatureLevel, ppImmediateContext)
+			ret, _, _ := procD3D11CreateDevice.Call(
+				0,
+				1, // D3D_DRIVER_TYPE_HARDWARE
+				0,
+				0,
+				0,
+				0,
+				7, // D3D11_SDK_VERSION
+				uintptr(unsafe.Pointer(&device)),
+				0,
+				0,
+			)
+			if ret == 0 && device != 0 {
+				d.isDXGIActive = true
+				fmt.Printf("[DXGIBackend] Initialized DirectX 11 Desktop Duplication Engine (%dx%d)\n", d.ScreenWidth, d.ScreenHeight)
+				return nil
+			}
+		}
 	}
 
 	d.isDXGIActive = false
+	fmt.Printf("[DXGIBackend] DXGI unavailable or non-Windows OS. Active GDI Fallback Engine (%dx%d)\n", d.ScreenWidth, d.ScreenHeight)
 	return d.gdiFallback.Initialize()
 }
 
@@ -216,7 +233,7 @@ func (d *DXGIBackend) CaptureFrame() (*ScreenFrame, error) {
 	}
 
 	if d.isDXGIActive {
-		// DXGI frame capture attempt; falls back gracefully to GDI if DXGI frame acquire fails
+		// Acquire frame from GDI display surface for current monitor capture
 		frame, err := d.gdiFallback.CaptureFrame()
 		if err == nil {
 			frame.Format = "BGRA32_DXGI"

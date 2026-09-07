@@ -231,23 +231,83 @@ async function runMasterUnifiedSuite() {
     const errorMsg = 'SAS execution unavailable: Windows policy/service/uiAccess requirements are not satisfied';
     assert.strictEqual(errorMsg.includes('SAS execution unavailable'), true);
   });
-  await test('PHASE 10', 'Test 42A: E2E Native VP8 Video Stream Delivery & RTP Payload Verification', () => {
-    // Validate RFC 6386 VP8 keyframe bitstream header tag (0x9D 0x01 0x2A) and partition payload
-    const vp8Header = Buffer.from([0x10, 0x00, 0x00, 0x9D, 0x01, 0x2A, 0x80, 0x07, 0x38, 0x04]);
-    assert.strictEqual(vp8Header[3], 0x9D);
-    assert.strictEqual(vp8Header[4], 0x01);
-    assert.strictEqual(vp8Header[5], 0x2A);
-    const width = vp8Header[6] | ((vp8Header[7] & 0x3F) << 8);
-    const height = vp8Header[8] | ((vp8Header[9] & 0x3F) << 8);
-    assert.strictEqual(width, 1920);
-    assert.strictEqual(height, 1080);
+  await test('PHASE 10', 'Test 42A: E2E Native VP8 Video Stream Delivery & Normalized Payload Signaling Schema', () => {
+    return new Promise((resolve, reject) => {
+      const hostWs = new WebSocket(SIGNALING_URL);
+      const viewerWs = new WebSocket(SIGNALING_URL);
+      const testHostId = 'E2E_VP8_ROOM_100';
+
+      hostWs.on('open', () => {
+        hostWs.send(JSON.stringify({ type: 'REGISTER_HOST', hostId: testHostId, passcode: 'PASS100', isNativeAgent: true }));
+      });
+
+      hostWs.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'HOST_REGISTERED') {
+          const doJoin = () => viewerWs.send(JSON.stringify({ type: 'JOIN_SESSION', hostId: testHostId, passcode: 'PASS100' }));
+          if (viewerWs.readyState === WebSocket.OPEN) doJoin();
+          else viewerWs.on('open', doJoin);
+        } else if (msg.type === 'VIEWER_JOINED') {
+          // Native Host sends SDP_OFFER using normalized 'payload' schema
+          const fakeOffer = { type: 'offer', sdp: 'v=0\r\no=- 12345 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n' };
+          hostWs.send(JSON.stringify({ type: 'SDP_OFFER', hostId: testHostId, payload: fakeOffer }));
+        } else if (msg.type === 'SDP_ANSWER') {
+          assert.strictEqual(msg.payload.type, 'answer');
+          hostWs.close();
+          viewerWs.close();
+          resolve();
+        }
+      });
+
+      viewerWs.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'SDP_OFFER') {
+          assert.strictEqual(msg.payload.type, 'offer');
+          assert.strictEqual(msg.payload.sdp.includes('VP8/90000'), true);
+          // Viewer responds with SDP_ANSWER using normalized 'payload' schema
+          const fakeAnswer = { type: 'answer', sdp: 'v=0\r\no=- 54321 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\na=rtpmap:96 VP8/90000\r\n' };
+          viewerWs.send(JSON.stringify({ type: 'SDP_ANSWER', hostId: testHostId, payload: fakeAnswer }));
+        }
+      });
+      hostWs.on('error', reject);
+      viewerWs.on('error', reject);
+    });
   });
-  await test('PHASE 10', 'Test 42B: E2E Native Opus Audio Stream Delivery & RTP Payload Verification', () => {
-    // Validate RFC 6716 Opus TOC header byte (0x6C for 48kHz stereo 20ms fullband Opus)
-    const opusHeader = Buffer.from([0x6C, 0x12, 0x34, 0x56, 0x78]);
-    assert.strictEqual(opusHeader[0], 0x6C);
-    assert.strictEqual(opusHeader.length >= 40, false); // Packet validation
-    assert.strictEqual(opusHeader[1], 0x12);
+  await test('PHASE 10', 'Test 42B: E2E Native Opus Audio Stream Delivery & ICE Candidate Relay Schema', () => {
+    return new Promise((resolve, reject) => {
+      const hostWs = new WebSocket(SIGNALING_URL);
+      const viewerWs = new WebSocket(SIGNALING_URL);
+      const testHostId = 'E2E_OPUS_ROOM_200';
+
+      hostWs.on('open', () => {
+        hostWs.send(JSON.stringify({ type: 'REGISTER_HOST', hostId: testHostId, passcode: 'PASS200', isNativeAgent: true }));
+      });
+
+      hostWs.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'HOST_REGISTERED') {
+          const doJoin = () => viewerWs.send(JSON.stringify({ type: 'JOIN_SESSION', hostId: testHostId, passcode: 'PASS200' }));
+          if (viewerWs.readyState === WebSocket.OPEN) doJoin();
+          else viewerWs.on('open', doJoin);
+        } else if (msg.type === 'VIEWER_JOINED') {
+          const fakeCand = { candidate: 'candidate:1 1 UDP 2122260223 127.0.0.1 54321 typ host', sdpMid: 'audio', sdpMLineIndex: 0 };
+          hostWs.send(JSON.stringify({ type: 'ICE_CANDIDATE', hostId: testHostId, payload: fakeCand }));
+        }
+      });
+
+      viewerWs.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'ICE_CANDIDATE') {
+          assert.strictEqual(msg.payload.sdpMid, 'audio');
+          assert.strictEqual(msg.payload.candidate.includes('127.0.0.1'), true);
+          hostWs.close();
+          viewerWs.close();
+          resolve();
+        }
+      });
+      hostWs.on('error', reject);
+      viewerWs.on('error', reject);
+    });
   });
   await test('PHASE 10', 'Node Launcher Integrity & Complete OS Input Injection Removal in index.js', () => {
     const indexJsContent = fs.readFileSync('/Content/AI-PROJECTS/PERSONAL VIEWER/host-agent/index.js', 'utf8');

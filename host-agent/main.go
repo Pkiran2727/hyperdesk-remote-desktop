@@ -22,16 +22,14 @@ import (
 	"github.com/pion/webrtc/v3/pkg/media"
 )
 
+// SignalingMessage defines the exact wire contract for HyperDesk Signaling Server
 type SignalingMessage struct {
-	Type     string          `json:"type"`
-	HostID   string          `json:"hostId,omitempty"`
-	Passcode string          `json:"passcode,omitempty"`
-	Payload  json.RawMessage `json:"payload,omitempty"`
-	Offer    json.RawMessage `json:"offer,omitempty"`
-	Answer   json.RawMessage `json:"answer,omitempty"`
-	Candidate json.RawMessage `json:"candidate,omitempty"`
-	Monitors []multimonitor.MonitorInfo `json:"monitors,omitempty"`
-	IsNativeAgent bool       `json:"isNativeAgent,omitempty"`
+	Type          string                     `json:"type"`
+	HostID        string                     `json:"hostId,omitempty"`
+	Passcode      string                     `json:"passcode,omitempty"`
+	Payload       json.RawMessage            `json:"payload,omitempty"`
+	Monitors      []multimonitor.MonitorInfo `json:"monitors,omitempty"`
+	IsNativeAgent bool                       `json:"isNativeAgent,omitempty"`
 }
 
 type NativeHostDaemon struct {
@@ -53,7 +51,6 @@ type NativeHostDaemon struct {
 
 	wsConn       *websocket.Conn
 	mu           sync.Mutex
-	cancelFunc   context.CancelFunc
 }
 
 func NewNativeHostDaemon(hostID, passcode, signalingURL string, fps int) *NativeHostDaemon {
@@ -101,8 +98,19 @@ func (d *NativeHostDaemon) connectAndRun(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	d.mu.Lock()
 	d.wsConn = conn
-	defer conn.Close()
+	d.mu.Unlock()
+
+	defer func() {
+		d.mu.Lock()
+		if d.wsConn != nil {
+			d.wsConn.Close()
+			d.wsConn = nil
+		}
+		d.mu.Unlock()
+	}()
 
 	log.Printf("[Signaling] Connected to WebSocket signaling server: %s", d.SignalingURL)
 
@@ -113,7 +121,11 @@ func (d *NativeHostDaemon) connectAndRun(ctx context.Context) error {
 		Passcode:      d.Passcode,
 		IsNativeAgent: true,
 	}
-	if err := conn.WriteJSON(regMsg); err != nil {
+
+	d.mu.Lock()
+	err = conn.WriteJSON(regMsg)
+	d.mu.Unlock()
+	if err != nil {
 		return err
 	}
 
@@ -142,26 +154,28 @@ func (d *NativeHostDaemon) handleSignalingMessage(ctx context.Context, msg Signa
 	case "VIEWER_JOINED":
 		log.Printf("[HostAgent] Viewer joined session. Initializing Pion WebRTC PeerConnection...")
 		monitors := d.monManager.EnumerateMonitors()
-		_ = d.wsConn.WriteJSON(SignalingMessage{
-			Type:     "MONITOR_LIST",
-			HostID:   d.HostID,
-			Monitors: monitors,
-		})
+		if d.wsConn != nil {
+			_ = d.wsConn.WriteJSON(SignalingMessage{
+				Type:     "MONITOR_LIST",
+				HostID:   d.HostID,
+				Monitors: monitors,
+			})
+		}
 		go d.initPeerConnectionAndOffer(ctx)
 
 	case "SDP_ANSWER":
-		if d.peerConn != nil && msg.Answer != nil {
+		if d.peerConn != nil && msg.Payload != nil {
 			var answer webrtc.SessionDescription
-			if err := json.Unmarshal(msg.Answer, &answer); err == nil {
+			if err := json.Unmarshal(msg.Payload, &answer); err == nil {
 				_ = d.peerConn.SetRemoteDescription(answer)
 				log.Printf("[WebRTC] Successfully set remote SDP answer.")
 			}
 		}
 
 	case "ICE_CANDIDATE":
-		if d.peerConn != nil && msg.Candidate != nil {
+		if d.peerConn != nil && msg.Payload != nil {
 			var candidate webrtc.ICECandidateInit
-			if err := json.Unmarshal(msg.Candidate, &candidate); err == nil {
+			if err := json.Unmarshal(msg.Payload, &candidate); err == nil {
 				_ = d.peerConn.AddIceCandidate(candidate)
 			}
 		}
@@ -185,7 +199,10 @@ func (d *NativeHostDaemon) initPeerConnectionAndOffer(ctx context.Context) {
 		log.Printf("[WebRTC] Failed to create PeerConnection: %v", err)
 		return
 	}
+
+	d.mu.Lock()
 	d.peerConn = pc
+	d.mu.Unlock()
 
 	// Add Native VP8 Video Track
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
@@ -195,7 +212,9 @@ func (d *NativeHostDaemon) initPeerConnectionAndOffer(ctx context.Context) {
 	)
 	if err == nil {
 		_, _ = pc.AddTrack(videoTrack)
+		d.mu.Lock()
 		d.videoTrack = videoTrack
+		d.mu.Unlock()
 	}
 
 	// Add Native Opus Audio Track
@@ -206,13 +225,18 @@ func (d *NativeHostDaemon) initPeerConnectionAndOffer(ctx context.Context) {
 	)
 	if err == nil {
 		_, _ = pc.AddTrack(audioTrack)
+		d.mu.Lock()
 		d.audioTrack = audioTrack
+		d.mu.Unlock()
 	}
 
 	// Host creates Data Channels
 	inputDc, err := pc.CreateDataChannel("input-events", nil)
 	if err == nil {
+		d.mu.Lock()
 		d.inputChannel = inputDc
+		d.mu.Unlock()
+
 		inputDc.OnMessage(func(msg webrtc.DataChannelMessage) {
 			_ = d.injector.InjectEvent(msg.Data)
 		})
@@ -225,11 +249,15 @@ func (d *NativeHostDaemon) initPeerConnectionAndOffer(ctx context.Context) {
 	pc.OnICECandidate(func(c *webrtc.ICECandidate) {
 		if c != nil {
 			candJSON, _ := json.Marshal(c.ToJSON())
-			_ = d.wsConn.WriteJSON(SignalingMessage{
-				Type:      "ICE_CANDIDATE",
-				HostID:    d.HostID,
-				Candidate: candJSON,
-			})
+			d.mu.Lock()
+			if d.wsConn != nil {
+				_ = d.wsConn.WriteJSON(SignalingMessage{
+					Type:    "ICE_CANDIDATE",
+					HostID:  d.HostID,
+					Payload: candJSON,
+				})
+			}
+			d.mu.Unlock()
 		}
 	})
 
@@ -246,11 +274,17 @@ func (d *NativeHostDaemon) initPeerConnectionAndOffer(ctx context.Context) {
 	_ = pc.SetLocalDescription(offer)
 
 	offerJSON, _ := json.Marshal(offer)
-	_ = d.wsConn.WriteJSON(SignalingMessage{
-		Type:   "SDP_OFFER",
-		HostID: d.HostID,
-		Offer:  offerJSON,
-	})
+
+	d.mu.Lock()
+	if d.wsConn != nil {
+		_ = d.wsConn.WriteJSON(SignalingMessage{
+			Type:    "SDP_OFFER",
+			HostID:  d.HostID,
+			Payload: offerJSON,
+		})
+	}
+	d.mu.Unlock()
+
 	log.Printf("[WebRTC] Sent native SDP offer to viewer.")
 }
 
@@ -264,7 +298,11 @@ func (d *NativeHostDaemon) streamVideoFrames(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if d.videoTrack == nil {
+			d.mu.Lock()
+			vt := d.videoTrack
+			d.mu.Unlock()
+
+			if vt == nil {
 				continue
 			}
 			frame, err := d.capturer.CaptureFrame()
@@ -276,7 +314,7 @@ func (d *NativeHostDaemon) streamVideoFrames(ctx context.Context) {
 				continue
 			}
 
-			_ = d.videoTrack.WriteSample(media.Sample{
+			_ = vt.WriteSample(media.Sample{
 				Data:     encoded,
 				Duration: frameDuration,
 			})
@@ -293,7 +331,11 @@ func (d *NativeHostDaemon) streamAudioFrames(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if d.audioTrack == nil {
+			d.mu.Lock()
+			at := d.audioTrack
+			d.mu.Unlock()
+
+			if at == nil {
 				continue
 			}
 			opusFrame, err := d.audioGrabber.ReadOpusFrame()
@@ -301,7 +343,7 @@ func (d *NativeHostDaemon) streamAudioFrames(ctx context.Context) {
 				continue
 			}
 
-			_ = d.audioTrack.WriteSample(media.Sample{
+			_ = at.WriteSample(media.Sample{
 				Data:     opusFrame,
 				Duration: 20 * time.Millisecond,
 			})
@@ -310,6 +352,9 @@ func (d *NativeHostDaemon) streamAudioFrames(ctx context.Context) {
 }
 
 func (d *NativeHostDaemon) Close() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	if d.capturer != nil {
 		_ = d.capturer.Close()
 	}
@@ -350,4 +395,5 @@ func main() {
 		log.Printf("[HostAgent] Daemon error: %v", err)
 	}
 }
+
 
