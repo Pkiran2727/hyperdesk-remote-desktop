@@ -13,6 +13,8 @@ import (
 var (
 	user32                     = syscall.NewLazyDLL("user32.dll")
 	gdi32                      = syscall.NewLazyDLL("gdi32.dll")
+	dxgi                       = syscall.NewLazyDLL("dxgi.dll")
+	d3d11                      = syscall.NewLazyDLL("d3d11.dll")
 	procGetDesktopWindow       = user32.NewProc("GetDesktopWindow")
 	procGetDC                  = user32.NewProc("GetDC")
 	procReleaseDC              = user32.NewProc("ReleaseDC")
@@ -23,6 +25,8 @@ var (
 	procGetDIBits              = gdi32.NewProc("GetDIBits")
 	procDeleteDC               = gdi32.NewProc("DeleteDC")
 	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procCreateDXGIFactory1     = dxgi.NewProc("CreateDXGIFactory1")
+	procD3D11CreateDevice      = d3d11.NewProc("D3D11CreateDevice")
 )
 
 const (
