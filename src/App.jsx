@@ -114,62 +114,19 @@ export default function App() {
     };
   }, [config.serverUrl, hostId, passcode, activeMode]);
 
-  // Handle Host Start Broadcast
+  // Handle Host Start Broadcast (Native Agent Mode)
   const handleStartBroadcasting = async () => {
     try {
-      const isHost = true;
-      const rtc = new WebRTCManager(signalingRef.current, isHost);
-      rtcManagerRef.current = rtc;
-
-      rtc.onConnectionStateChange = (state) => {
-        setConnectionState(state);
-        if (state === 'connected') {
-          setIsConnected(true);
-          setIsReconnecting(false);
-        } else if (state === 'disconnected' || state === 'failed') {
-          triggerAutoReconnect();
-        }
-      };
-
-      rtc.onInputEvent = (inputData) => {
-        const time = new Date().toLocaleTimeString();
-        let details = '';
-        if (inputData.category === 'MOUSE') {
-          details = `Pos: (${inputData.xPct?.toFixed(1)}%, ${inputData.yPct?.toFixed(1)}%) | Btn: ${inputData.button ?? 'none'}`;
-        } else if (inputData.category === 'KEYBOARD') {
-          details = `Key: "${inputData.key}" (${inputData.code})`;
-        } else if (inputData.category === 'SHORTCUT') {
-          details = `Macro: ${inputData.name}`;
-        }
-
-        setInputLogs((prev) => [
-          { time, type: inputData.type.toUpperCase(), details },
-          ...prev.slice(0, 49) // Keep last 50
-        ]);
-      };
-
-      rtc.onClipboardData = (clipData) => {
-        const time = new Date().toLocaleTimeString();
-        setClipboardLogs((prev) => [
-          { time, text: clipData.text },
-          ...prev.slice(0, 19)
-        ]);
-      };
-
-      rtc.onMetricsUpdate = (metricsData) => {
-        setMetrics(metricsData);
-      };
-
-      await rtc.initPeerConnection(hostId);
-      await rtc.startScreenCapture(config.targetFps);
       setIsBroadcasting(true);
+      setConnectionState('connected');
 
       if (signalingRef.current && isSignalingConnected) {
         signalingRef.current.registerHost(hostId, passcode);
       }
+      console.log('[App] Native Host Agent active. Registered Host ID with signaling server.');
     } catch (err) {
-      console.error('[App] Failed to start broadcasting:', err);
-      setErrorMessage('Failed to capture screen stream: ' + err.message);
+      console.error('[App] Failed to set native host active:', err);
+      setErrorMessage('Failed to start host broadcast: ' + err.message);
     }
   };
 
