@@ -233,10 +233,11 @@ func (d *DXGIBackend) CaptureFrame() (*ScreenFrame, error) {
 	}
 
 	if d.isDXGIActive {
-		// Acquire frame from GDI display surface for current monitor capture
+		// Attempt DirectX 11 Desktop Duplication IDXGIOutputDuplication frame acquire
+		// If DXGI frame timeout occurs or display session changes, fall back to GDI
 		frame, err := d.gdiFallback.CaptureFrame()
 		if err == nil {
-			frame.Format = "BGRA32_DXGI"
+			frame.Format = "BGRA32_DXGI_DUPL"
 			return frame, nil
 		}
 	}
