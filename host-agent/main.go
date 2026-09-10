@@ -39,7 +39,7 @@ type NativeHostDaemon struct {
 	FPS          int
 
 	capturer     *capture.DesktopCapturer
-	vp8Encoder   *video.VP8Encoder
+	vp8Encoder   video.VideoEncoder
 	audioGrabber *audio.AudioGrabber
 	monManager   *multimonitor.MonitorManager
 	injector     *input.NativeInputInjector
@@ -57,13 +57,18 @@ func NewNativeHostDaemon(hostID, passcode, signalingURL string, fps int) *Native
 	capturer := capture.NewDesktopCapturer(fps)
 	_ = capturer.InitializeDXGI()
 
+	enc, err := video.NewVideoEncoder(1920, 1080, fps)
+	if err != nil {
+		log.Fatalf("[NativeHostDaemon] Fatal: %v", err)
+	}
+
 	return &NativeHostDaemon{
 		HostID:       hostID,
 		Passcode:     passcode,
 		SignalingURL: signalingURL,
 		FPS:          fps,
 		capturer:     capturer,
-		vp8Encoder:   video.NewVP8Encoder(1920, 1080, fps),
+		vp8Encoder:   enc,
 		audioGrabber: audio.NewAudioGrabber(),
 		monManager:   multimonitor.NewMonitorManager(),
 		injector:     input.NewNativeInputInjector(),
