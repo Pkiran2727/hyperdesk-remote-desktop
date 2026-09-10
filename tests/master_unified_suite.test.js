@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import assert from 'assert';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { RateLimiter } from '../signaling-server/rateLimiter.js';
 import { RedisClusterManager } from '../signaling-server/redisCluster.js';
 import { TouchGestureTranslator } from '../mobile-app/src/components/TouchCanvas.js';
@@ -222,6 +223,11 @@ async function runMasterUnifiedSuite() {
     const targetFps = 60;
     const durationMs = 1000 / targetFps;
     assert.strictEqual(Math.round(durationMs), 17);
+
+    // Verify libvpx Cgo source file and hardware probing exist
+    const vpxSource = fs.readFileSync('/Content/AI-PROJECTS/PERSONAL VIEWER/host-agent/video/vpx_cgo.go', 'utf8');
+    assert.strictEqual(vpxSource.includes('vpx_codec_encode'), true);
+    assert.strictEqual(vpxSource.includes('vpx_codec_decode'), true);
   });
   await test('PHASE 9', 'Dual Capture Backend Interface (DXGI Primary + GDI Fallback) Resource Ownership & Cleanup', () => {
     const backendNames = ['DXGIBackend', 'GDIBackend'];

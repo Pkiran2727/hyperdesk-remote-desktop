@@ -8,8 +8,8 @@ import (
 
 func TestHardwareProbe(t *testing.T) {
 	info := DetectHardwareCapabilities(1920, 1080)
-	t.Logf("Probe Result: Backend=%s, Device=%s, VP8Encode=%t, Reason=%s",
-		info.Backend, info.Device, info.VP8Encode, info.Reason)
+	t.Logf("Probe Result: Vendor=%s, Device=%s, Backend=%s, VP8Encode=%t, Reason=%s",
+		info.Vendor, info.Device, info.Backend, info.VP8Encode, info.Reason)
 
 	if info.Backend != "SOFTWARE (libvpx)" && info.Backend != "VAAPI" {
 		t.Fatalf("Unexpected backend: %s", info.Backend)
@@ -32,7 +32,7 @@ func TestLibvpxEncoderAndDecoderVerification(t *testing.T) {
 	}
 	defer enc.Close()
 
-	// Create 1920x1080 BGRA test frame with blue color pattern
+	// Create 1920x1080 BGRA test frame with specific RGB values: B=255, G=128, R=64
 	bgraData := make([]byte, width*height*4)
 	for i := 0; i < len(bgraData); i += 4 {
 		bgraData[i] = 255   // Blue
@@ -47,6 +47,10 @@ func TestLibvpxEncoderAndDecoderVerification(t *testing.T) {
 		Data:   bgraData,
 	}
 
+	// Expected ITU-R BT.601 YUV values for RGB(64, 128, 255):
+	// Y ≈ 112, U ≈ 209, V ≈ 93
+	expectedY := byte(112)
+
 	// 1. Encode frame using libvpx
 	payload, err := enc.Encode(frame)
 	if err != nil {
@@ -59,8 +63,8 @@ func TestLibvpxEncoderAndDecoderVerification(t *testing.T) {
 
 	t.Logf("Successfully encoded frame: %d bytes VP8 bitstream", len(payload))
 
-	// 2. Decode payload using libvpx decoder to verify 100% valid VP8 bitstream
-	decodedWidth, decodedHeight, isKeyframe, err := DecodeVP8Frame(payload)
+	// 2. Decode payload using libvpx decoder to verify 100% valid VP8 bitstream & pixel integrity
+	decodedWidth, decodedHeight, isKeyframe, sampleY, sampleU, sampleV, err := DecodeVP8Frame(payload)
 	if err != nil {
 		t.Fatalf("VP8 Bitstream Decode failed (Corrupt or Invalid VP8): %v", err)
 	}
@@ -77,5 +81,13 @@ func TestLibvpxEncoderAndDecoderVerification(t *testing.T) {
 		t.Errorf("Expected first encoded frame to be a Keyframe, but got Interframe")
 	}
 
-	t.Logf("✅ Bitstream Verification Passed: Decoded %dx%d keyframe successfully from libvpx payload", decodedWidth, decodedHeight)
+	// Verify Y luminance pixel value tolerance (±15 for lossy VP8 quantization)
+	diffY := int(sampleY) - int(expectedY)
+	if diffY < -15 || diffY > 15 {
+		t.Errorf("Pixel integrity check failed: sampled Y=%d, expected ~%d (U=%d, V=%d)", sampleY, expectedY, sampleU, sampleV)
+	} else {
+		t.Logf("✅ Pixel Integrity Verified: Sampled Y=%d (Expected ~%d), U=%d, V=%d", sampleY, expectedY, sampleU, sampleV)
+	}
+
+	t.Logf("✅ Bitstream & Pixel Verification Passed: Decoded %dx%d keyframe successfully from libvpx payload", decodedWidth, decodedHeight)
 }

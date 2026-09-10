@@ -186,14 +186,14 @@ func convertBGRAToI420Plane(bgra []byte, width, height int, img *C.vpx_image_t) 
 }
 
 // DecodeVP8Frame decodes a VP8 elementary payload back into a raw vpx_image for test verification
-func DecodeVP8Frame(payload []byte) (int, int, bool, error) {
+func DecodeVP8Frame(payload []byte) (int, int, bool, byte, byte, byte, error) {
 	if len(payload) == 0 {
-		return 0, 0, false, fmt.Errorf("empty payload")
+		return 0, 0, false, 0, 0, 0, fmt.Errorf("empty payload")
 	}
 
 	var codec C.vpx_codec_ctx_t
 	if res := C.vpx_codec_dec_init_ver(&codec, C.vpx_codec_vp8_dx(), nil, 0, C.VPX_DECODER_ABI_VERSION); res != C.VPX_CODEC_OK {
-		return 0, 0, false, fmt.Errorf("failed to init libvpx decoder: %d", res)
+		return 0, 0, false, 0, 0, 0, fmt.Errorf("failed to init libvpx decoder: %d", res)
 	}
 	defer C.vpx_codec_destroy(&codec)
 
@@ -201,20 +201,33 @@ func DecodeVP8Frame(payload []byte) (int, int, bool, error) {
 	payloadLen := C.uint(len(payload))
 
 	if res := C.vpx_codec_decode(&codec, payloadPtr, payloadLen, nil, 0); res != C.VPX_CODEC_OK {
-		return 0, 0, false, fmt.Errorf("libvpx decode failed: %d", res)
+		return 0, 0, false, 0, 0, 0, fmt.Errorf("libvpx decode failed: %d", res)
 	}
 
 	var iter C.vpx_codec_iter_t
 	img := C.vpx_codec_get_frame(&codec, &iter)
 	if img == nil {
-		return 0, 0, false, fmt.Errorf("libvpx decoder produced no image")
+		return 0, 0, false, 0, 0, 0, fmt.Errorf("libvpx decoder produced no image")
 	}
 
 	width := int(img.d_w)
 	height := int(img.d_h)
 
+	// Sample center pixel (Y, U, V)
+	yPlane := unsafe.Slice((*byte)(unsafe.Pointer(img.planes[C.VPX_PLANE_Y])), int(img.stride[C.VPX_PLANE_Y])*height)
+	uPlane := unsafe.Slice((*byte)(unsafe.Pointer(img.planes[C.VPX_PLANE_U])), int(img.stride[C.VPX_PLANE_U])*(height/2))
+	vPlane := unsafe.Slice((*byte)(unsafe.Pointer(img.planes[C.VPX_PLANE_V])), int(img.stride[C.VPX_PLANE_V])*(height/2))
+
+	centerIdxY := (height / 2) * int(img.stride[C.VPX_PLANE_Y]) + (width / 2)
+	centerIdxU := (height / 4) * int(img.stride[C.VPX_PLANE_U]) + (width / 4)
+	centerIdxV := (height / 4) * int(img.stride[C.VPX_PLANE_V]) + (width / 4)
+
+	sampleY := yPlane[centerIdxY]
+	sampleU := uPlane[centerIdxU]
+	sampleV := vPlane[centerIdxV]
+
 	// Check keyframe bit from payload header (RFC 6386 section 9.1: frame type bit 0 = 0 for keyframe)
 	isKeyframe := (payload[0] & 0x01) == 0
 
-	return width, height, isKeyframe, nil
+	return width, height, isKeyframe, sampleY, sampleU, sampleV, nil
 }
